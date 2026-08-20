@@ -301,12 +301,12 @@ static void sys_tree__user_update(
 		 * Once all six values would be displayed as 0.00, the
 		 * username is considered inactive and can be removed.
 		 */
-		if(stats->publish_received_pkts_load[0] < 0.005
-				&& stats->publish_received_pkts_load[1] < 0.005
-				&& stats->publish_received_pkts_load[2] < 0.005
-				&& stats->publish_received_bytes_load[0] < 0.005
-				&& stats->publish_received_bytes_load[1] < 0.005
-				&& stats->publish_received_bytes_load[2] < 0.005){
+		if(stats->publish_received_pkts_load[0] < 0.005 &&
+		   stats->publish_received_pkts_load[1] < 0.005 &&
+		   stats->publish_received_pkts_load[2] < 0.005 &&
+		   stats->publish_received_bytes_load[0] < 0.005 &&
+		   stats->publish_received_bytes_load[1] < 0.005 &&
+		   stats->publish_received_bytes_load[2] < 0.005){
 			int i, j;
 			char topic[1024];
 			const char *interval_name[3] = {"1min", "5min", "15min"};

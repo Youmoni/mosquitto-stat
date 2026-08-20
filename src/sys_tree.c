@@ -25,6 +25,7 @@ Contributors:
 #include <inttypes.h>
 #include <limits.h>
 #include <inttypes.h>
+#include <string.h>
 
 #include "mosquitto_broker_internal.h"
 #include "sys_tree.h"
@@ -50,6 +51,313 @@ struct metric_load {
 	int load_ref;
 	uint8_t interval;
 };
+
+struct sys_user_stats {
+	UT_hash_handle hh;
+
+	char *username;
+	char *topic_username;
+
+	int64_t publish_received_current;
+	int64_t publish_received_next;
+	double publish_received_load[3];
+
+	int64_t publish_sent_current;
+	int64_t publish_sent_next;
+	double publish_sent_load[3];
+};
+
+static struct sys_user_stats *user_stats = NULL;
+
+
+static bool username_is_unreserved(unsigned char c)
+{
+	return (c >= 'a' && c <= 'z')
+		|| (c >= 'A' && c <= 'Z')
+		|| (c >= '0' && c <= '9')
+		|| c == '-'
+		|| c == '.'
+		|| c == '_'
+		|| c == '~';
+}
+
+
+static char hex_digit(unsigned int value)
+{
+	if(value < 10){
+		return (char)('0' + value);
+	}
+	return (char)('A' + value - 10);
+}
+
+
+/*
+ * Encode the username as one MQTT topic level.
+ *
+ * RFC 3986 unreserved characters are kept unchanged. All other bytes
+ * are encoded as %HH. This operates on UTF-8 bytes rather than Unicode
+ * code points, which is what we want for an MQTT UTF-8 username.
+ */
+static char *username_encode(const char *username)
+{
+	const char *source;
+	size_t len;
+	size_t encoded_len = 0;
+	size_t i;
+	char *result;
+	char *p;
+
+	if(username){
+		source = username;
+	}else{
+		source = "anonymous";
+	}
+
+	len = strlen(source);
+
+	for(i = 0; i < len; i++){
+		if(username_is_unreserved((unsigned char)source[i])){
+			encoded_len++;
+		}else{
+			encoded_len += 3;
+		}
+	}
+
+	result = mosquitto_malloc(encoded_len + 1);
+	if(!result){
+		return NULL;
+	}
+
+	p = result;
+	for(i = 0; i < len; i++){
+		unsigned char c = (unsigned char)source[i];
+
+		if(username_is_unreserved(c)){
+			*p++ = (char)c;
+		}else{
+			*p++ = '%';
+			*p++ = hex_digit(c >> 4);
+			*p++ = hex_digit(c & 0x0F);
+		}
+	}
+	*p = '\0';
+
+	return result;
+}
+
+
+static struct sys_user_stats *sys_tree__user_get(const char *username)
+{
+	struct sys_user_stats *stats;
+	const char *key;
+
+	if(db.config->sys_interval == 0){
+		return NULL;
+	}
+
+	key = username ? username : "anonymous";
+
+	HASH_FIND_STR(user_stats, key, stats);
+	if(stats){
+		return stats;
+	}
+
+	stats = mosquitto_calloc(1, sizeof(*stats));
+	if(!stats){
+		return NULL;
+	}
+
+	stats->username = mosquitto_strdup(key);
+	if(!stats->username){
+		mosquitto_FREE(stats);
+		return NULL;
+	}
+
+	stats->topic_username = username_encode(username);
+	if(!stats->topic_username){
+		mosquitto_FREE(stats->username);
+		mosquitto_FREE(stats);
+		return NULL;
+	}
+
+	HASH_ADD_KEYPTR(hh, user_stats, stats->username,
+			strlen(stats->username), stats);
+
+	return stats;
+}
+
+
+static void sys_tree__user_inc(const char *username, bool sent)
+{
+	struct sys_user_stats *stats;
+
+	stats = sys_tree__user_get(username);
+	if(!stats){
+		return;
+	}
+
+	if(sent){
+		stats->publish_sent_next++;
+	}else{
+		stats->publish_received_next++;
+	}
+}
+
+
+void sys_tree__user_publish_received(const char *username)
+{
+      const char *value = username ? username : "anonymous";
+
+      db__messages_easy_queue(
+          NULL,
+          "$SYS/broker/publish/last",
+          SYS_TREE_QOS,
+          (uint32_t)strlen(value),
+          value,
+          1,
+          MSG_EXPIRY_INFINITE,
+          NULL);
+
+      sys_tree__user_inc(username, false);
+}
+
+
+void sys_tree__user_publish_sent(const char *username)
+{
+	sys_tree__user_inc(username, true);
+}
+
+
+static void sys_tree__user_calc_load(
+		struct sys_user_stats *stats,
+		char *topic,
+		char *buf,
+		const double exponent[3],
+		double i_mult,
+		bool sent)
+{
+	int64_t current;
+	int64_t next;
+	double *loads;
+	const char *direction;
+	const char *interval_name[3] = {"1min", "5min", "15min"};
+	size_t i;
+
+	if(sent){
+		current = stats->publish_sent_current;
+		next = stats->publish_sent_next;
+		loads = stats->publish_sent_load;
+		direction = "sent";
+	}else{
+		current = stats->publish_received_current;
+		next = stats->publish_received_next;
+		loads = stats->publish_received_load;
+		direction = "received";
+	}
+
+	for(i = 0; i < 3; i++){
+		double interval;
+		double new_value;
+		uint32_t len;
+
+		interval = (double)(next - current) * i_mult;
+		new_value = interval + exponent[i] * (loads[i] - interval);
+
+		if(fabs(new_value - loads[i]) >= 0.01){
+			len = (uint32_t)snprintf(buf, BUFLEN, "%.2f", new_value);
+			snprintf(topic, 1024,
+				 "$SYS/broker/users/%s/load/publish/%s/%s",
+				 stats->topic_username,
+				 direction,
+				 interval_name[i]);
+			db__messages_easy_queue(NULL, topic, SYS_TREE_QOS, len,
+						buf, 1, MSG_EXPIRY_INFINITE, NULL);
+		}
+
+		loads[i] = new_value;
+	}
+
+	if(sent){
+		stats->publish_sent_current = stats->publish_sent_next;
+	}else{
+		stats->publish_received_current = stats->publish_received_next;
+	}
+}
+
+
+static void sys_tree__user_update(
+		double exponent_1min,
+		double exponent_5min,
+		double exponent_15min,
+		double i_mult)
+{
+	struct sys_user_stats *stats;
+	struct sys_user_stats *tmp;
+	double exponent[3];
+	char topic[1024];
+	char buf[BUFLEN];
+
+	exponent[0] = exponent_1min;
+	exponent[1] = exponent_5min;
+	exponent[2] = exponent_15min;
+
+	HASH_ITER(hh, user_stats, stats, tmp){
+		sys_tree__user_calc_load(stats, topic, buf, exponent, i_mult, false);
+		sys_tree__user_calc_load(stats, topic, buf, exponent, i_mult, true);
+
+		/*
+		 * The load values are published with two decimal places.
+		 * Once all six values would be displayed as 0.00, the
+		 * username is considered inactive and can be removed.
+		 */
+		if(stats->publish_received_load[0] < 0.005
+				&& stats->publish_received_load[1] < 0.005
+				&& stats->publish_received_load[2] < 0.005
+				&& stats->publish_sent_load[0] < 0.005
+				&& stats->publish_sent_load[1] < 0.005
+				&& stats->publish_sent_load[2] < 0.005){
+			int i, j;
+			char topic[1024];
+			const char *interval_name[3] = {"1min", "5min", "15min"};
+			const char *direction[2] = {"sent", "received"};
+
+			for(i = 0; i < 3; i++){
+				for(j = 0; j < 2; j++){
+					snprintf(topic, 1024,
+						 "$SYS/broker/users/%s/load/publish/%s/%s",
+						 stats->topic_username,
+						 direction[j],
+						 interval_name[i]);
+					db__messages_easy_queue(NULL, topic, SYS_TREE_QOS, 4,
+								"0.00", 1, MSG_EXPIRY_INFINITE, NULL);
+					db__messages_easy_queue(NULL, topic, SYS_TREE_QOS, 0,
+								NULL, 1, 0, NULL);
+				}
+			}
+
+			HASH_DELETE(hh, user_stats, stats);
+
+			mosquitto_FREE(stats->username);
+			mosquitto_FREE(stats->topic_username);
+			mosquitto_FREE(stats);
+		}
+	}
+}
+
+
+void sys_tree__cleanup(void)
+{
+	struct sys_user_stats *stats;
+	struct sys_user_stats *tmp;
+
+	HASH_ITER(hh, user_stats, stats, tmp){
+		HASH_DELETE(hh, user_stats, stats);
+		mosquitto_FREE(stats->username);
+		mosquitto_FREE(stats->topic_username);
+		mosquitto_FREE(stats);
+	}
+	user_stats = NULL;
+}
 
 struct metric metrics[mosq_metric_max] = {
 	{ 1, 0, "$SYS/broker/clients/total", NULL, false }, /* mosq_gauge_clients_total */
@@ -275,6 +583,12 @@ void sys_tree__update(bool force)
 					calc_load(buf, exponent_15min, i_mult, &metric_loads[i], false);
 				}
 			}
+
+			sys_tree__user_update(
+					exponent_1min,
+					exponent_5min,
+					exponent_15min,
+					i_mult);
 		}
 
 		for(int i=0; i<mosq_metric_max; i++){

@@ -375,6 +375,9 @@ static void post_shutdown_cleanup(void)
 #ifdef WITH_BRIDGE
 	bridge__db_cleanup();
 #endif
+#ifdef WITH_SYS_TREE
+	sys_tree__cleanup();
+#endif
 	context__free_disused();
 	keepalive__cleanup();
 

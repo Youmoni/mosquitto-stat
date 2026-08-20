@@ -57,6 +57,7 @@ int handle__packet(struct mosquitto *context)
 			break;
 		case CMD_PUBLISH:
 			metrics__int_inc(mosq_counter_mqtt_publish_received, 1);
+			sys_tree__user_publish_received(context->username);
 			rc = handle__publish(context);
 			break;
 		case CMD_PUBREC:

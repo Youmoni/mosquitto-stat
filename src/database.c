@@ -543,6 +543,15 @@ int db__message_insert_incoming(struct mosquitto *context, uint64_t cmsg_id, str
 		db__msg_add_to_inflight_stats(msg_data, client_msg);
 	}
 
+	/*
+	 * Attribute the outgoing delivery to the client that originally
+	 * published the message. Broker-generated messages are deliberately
+	 * excluded so that they don't appear in the "anonymous" group.
+	 */
+	if(base_msg->origin == mosq_mo_client){
+		sys_tree__user_publish_sent(base_msg->data.source_username);
+	}
+
 	if(persist && context->is_persisted){
 		plugin_persist__handle_base_msg_add(client_msg->base_msg);
 		plugin_persist__handle_client_msg_add(context, client_msg);

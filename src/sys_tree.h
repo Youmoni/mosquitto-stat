@@ -114,15 +114,13 @@ enum mosq_metric_load_type {
 
 void metrics__int_inc(enum mosq_metric_type m, int64_t value);
 void metrics__int_dec(enum mosq_metric_type m, int64_t value);
-void sys_tree__user_publish_received(const char *username);
-void sys_tree__user_publish_sent(const char *username);
+void sys_tree__user_publish_received(const char *username, uint64_t bytes);
 void sys_tree__cleanup(void);
 
 #else
 #  define metrics__int_inc(A, B)
 #  define metrics__int_dec(A, B)
 #  define sys_tree__user_publish_received(A)
-#  define sys_tree__user_publish_sent(A)
 #  define sys_tree__cleanup()
 
 #endif

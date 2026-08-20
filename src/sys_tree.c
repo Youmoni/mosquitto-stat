@@ -58,13 +58,13 @@ struct sys_user_stats {
 	char *username;
 	char *topic_username;
 
-	int64_t publish_received_current;
-	int64_t publish_received_next;
-	double publish_received_load[3];
+	uint64_t publish_received_pkts_current;
+	uint64_t publish_received_pkts_next;
+	double publish_received_pkts_load[3];
 
-	int64_t publish_sent_current;
-	int64_t publish_sent_next;
-	double publish_sent_load[3];
+	uint64_t publish_received_bytes_current;
+	uint64_t publish_received_bytes_next;
+	double publish_received_bytes_load[3];
 };
 
 static struct sys_user_stats *user_stats = NULL;
@@ -187,7 +187,7 @@ static struct sys_user_stats *sys_tree__user_get(const char *username)
 }
 
 
-static void sys_tree__user_inc(const char *username, bool sent)
+static void sys_tree__user_inc(const char *username, uint64_t bytes)
 {
 	struct sys_user_stats *stats;
 
@@ -196,15 +196,12 @@ static void sys_tree__user_inc(const char *username, bool sent)
 		return;
 	}
 
-	if(sent){
-		stats->publish_sent_next++;
-	}else{
-		stats->publish_received_next++;
-	}
+	stats->publish_received_bytes_next += bytes;
+	stats->publish_received_pkts_next++;
 }
 
 
-void sys_tree__user_publish_received(const char *username)
+void sys_tree__user_publish_received(const char *username, uint64_t bytes)
 {
       const char *value = username ? username : "anonymous";
 
@@ -218,13 +215,7 @@ void sys_tree__user_publish_received(const char *username)
           MSG_EXPIRY_INFINITE,
           NULL);
 
-      sys_tree__user_inc(username, false);
-}
-
-
-void sys_tree__user_publish_sent(const char *username)
-{
-	sys_tree__user_inc(username, true);
+      sys_tree__user_inc(username, bytes);
 }
 
 
@@ -234,25 +225,25 @@ static void sys_tree__user_calc_load(
 		char *buf,
 		const double exponent[3],
 		double i_mult,
-		bool sent)
+		bool bytes)
 {
-	int64_t current;
-	int64_t next;
+	uint64_t current;
+	uint64_t next;
 	double *loads;
-	const char *direction;
+	const char *kind;
 	const char *interval_name[3] = {"1min", "5min", "15min"};
 	size_t i;
 
-	if(sent){
-		current = stats->publish_sent_current;
-		next = stats->publish_sent_next;
-		loads = stats->publish_sent_load;
-		direction = "sent";
+	if(bytes){
+		current = stats->publish_received_bytes_current;
+		next = stats->publish_received_bytes_next;
+		loads = stats->publish_received_bytes_load;
+		kind = "bytes";
 	}else{
-		current = stats->publish_received_current;
-		next = stats->publish_received_next;
-		loads = stats->publish_received_load;
-		direction = "received";
+		current = stats->publish_received_pkts_current;
+		next = stats->publish_received_pkts_next;
+		loads = stats->publish_received_pkts_load;
+		kind = "pkts";
 	}
 
 	for(i = 0; i < 3; i++){
@@ -266,9 +257,9 @@ static void sys_tree__user_calc_load(
 		if(fabs(new_value - loads[i]) >= 0.01){
 			len = (uint32_t)snprintf(buf, BUFLEN, "%.2f", new_value);
 			snprintf(topic, 1024,
-				 "$SYS/broker/users/%s/load/publish/%s/%s",
+				 "$SYS/broker/users/%s/load/publish/received/%s/%s",
 				 stats->topic_username,
-				 direction,
+				 kind,
 				 interval_name[i]);
 			db__messages_easy_queue(NULL, topic, SYS_TREE_QOS, len,
 						buf, 1, MSG_EXPIRY_INFINITE, NULL);
@@ -277,10 +268,10 @@ static void sys_tree__user_calc_load(
 		loads[i] = new_value;
 	}
 
-	if(sent){
-		stats->publish_sent_current = stats->publish_sent_next;
+	if(bytes){
+		stats->publish_received_bytes_current = stats->publish_received_bytes_next;
 	}else{
-		stats->publish_received_current = stats->publish_received_next;
+		stats->publish_received_pkts_current = stats->publish_received_pkts_next;
 	}
 }
 
@@ -310,23 +301,23 @@ static void sys_tree__user_update(
 		 * Once all six values would be displayed as 0.00, the
 		 * username is considered inactive and can be removed.
 		 */
-		if(stats->publish_received_load[0] < 0.005
-				&& stats->publish_received_load[1] < 0.005
-				&& stats->publish_received_load[2] < 0.005
-				&& stats->publish_sent_load[0] < 0.005
-				&& stats->publish_sent_load[1] < 0.005
-				&& stats->publish_sent_load[2] < 0.005){
+		if(stats->publish_received_pkts_load[0] < 0.005
+				&& stats->publish_received_pkts_load[1] < 0.005
+				&& stats->publish_received_pkts_load[2] < 0.005
+				&& stats->publish_received_bytes_load[0] < 0.005
+				&& stats->publish_received_bytes_load[1] < 0.005
+				&& stats->publish_received_bytes_load[2] < 0.005){
 			int i, j;
 			char topic[1024];
 			const char *interval_name[3] = {"1min", "5min", "15min"};
-			const char *direction[2] = {"sent", "received"};
+			const char *kind[2] = {"bytes", "pkts"};
 
 			for(i = 0; i < 3; i++){
 				for(j = 0; j < 2; j++){
 					snprintf(topic, 1024,
-						 "$SYS/broker/users/%s/load/publish/%s/%s",
+						 "$SYS/broker/users/%s/load/publish/received/%s/%s",
 						 stats->topic_username,
-						 direction[j],
+						 kind[j],
 						 interval_name[i]);
 					db__messages_easy_queue(NULL, topic, SYS_TREE_QOS, 4,
 								"0.00", 1, MSG_EXPIRY_INFINITE, NULL);

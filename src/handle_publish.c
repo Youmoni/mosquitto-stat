@@ -395,5 +395,7 @@ int handle__publish(struct mosquitto *context)
 #endif
 	}
 
+	sys_tree__user_publish_received(context->username, base_msg->data.payloadlen);
+
 	return handle__accepted_publish(context, base_msg, mid, dup, &message_expiry_interval);
 }

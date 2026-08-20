@@ -232,7 +232,7 @@ static void sys_tree__user_calc_load(
 	double *loads;
 	const char *kind;
 	const char *interval_name[3] = {"1min", "5min", "15min"};
-	size_t i;
+	uint8_t i;
 
 	if(bytes){
 		current = stats->publish_received_bytes_current;

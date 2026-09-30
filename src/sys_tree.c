@@ -265,6 +265,18 @@ static void sys_tree__user_calc_load(
 						buf, 1, MSG_EXPIRY_INFINITE, NULL);
 		}
 
+#ifdef WITH_YM_STAT
+		if (db.now_real_s % 60 == 0){
+			len = (uint32_t)snprintf(buf, BUFLEN,
+						 "{\"points\":[{\"field\":%lu,\"value\":%.2f,\"timestamp\":%lu}]}",
+						 70000 + bytes * 10 + i, new_value, db.now_real_s * 1000);
+			snprintf(topic, 1024,
+				 "stat/%s/sensor/json",
+				 stats->topic_username);
+			db__messages_easy_queue(NULL, topic, 0, len,
+						buf, 0, MSG_EXPIRY_INFINITE, NULL);
+		}
+#endif
 		loads[i] = new_value;
 	}
 

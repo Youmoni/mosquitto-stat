@@ -69,3 +69,7 @@ endif
 ifeq ($(WITH_XTREPORT),yes)
 	LOCAL_CPPFLAGS+=-DWITH_XTREPORT
 endif
+
+ifeq ($(WITH_YM_STAT),yes)
+	LOCAL_CPPFLAGS+=-DWITH_YM_STAT
+endif

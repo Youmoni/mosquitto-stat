@@ -36,6 +36,7 @@ build_variants = [
     'WITH_WEBSOCKETS',
     'WITH_WEBSOCKETS_BUILTIN',
     'WITH_XTREPORT',
+    'WITH_YM_STAT',
 ]
 
 special_variants = [

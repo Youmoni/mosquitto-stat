@@ -150,6 +150,9 @@ WITH_EDITLINE=yes
 # Build with basic HTTP API support
 WITH_HTTP_API=yes
 
+# Build with Youmoni proprietary statistics
+WITH_YM_STAT:=yes
+
 # =============================================================================
 # End of user configuration
 # =============================================================================
